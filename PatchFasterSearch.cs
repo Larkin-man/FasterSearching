@@ -1,42 +1,58 @@
-﻿using System.Collections.Generic;
-using HarmonyLib;
+﻿using HarmonyLib;
 using Il2Cpp;
 
 namespace FasterSearching
 {
-    [HarmonyPatch(typeof(Container), nameof(Container.BeginContainerOpen))]
+    [HarmonyPatch(typeof(ContainerInteraction))]
     internal static class PatchFasterSearch
     {
-        // Запоминаем оригинальное время обыска для каждого контейнера по его InstanceID,
-        // чтобы при повторном открытии множитель не применялся несколько раз подряд
-        private static readonly Dictionary<int, float> OriginalSearchTimes = new Dictionary<int, float>();
-
-        private static void Prefix(Container __instance)
+        [HarmonyPostfix]
+        [HarmonyPatch(nameof(ContainerInteraction.PerformHold))]
+        private static void PerformHold_Postfix(ContainerInteraction __instance, ref bool __result)
         {
-            if (__instance == null) return;
-
-            int instanceId = __instance.GetInstanceID();
-
-            if (!OriginalSearchTimes.TryGetValue(instanceId, out float baseSearchTime))
+            if (!__result || __instance == null || __instance.m_Container == null || FasterSearchingSettings.Instance == null)
             {
-                baseSearchTime = __instance.m_ContainerSearchSeconds;
-                OriginalSearchTimes[instanceId] = baseSearchTime;
+                return;
             }
 
-            bool isEmpty = __instance.IsEmpty();
-            bool isInspected = __instance.IsInspected();
-
-            if (isEmpty && FasterSearchingSettings.options.instantEmptyContainers)
+            // Не вмешиваемся во взлом сейфа
+            if (__instance.m_IsSafeCracking || __instance.m_Container.IsSafeLocked())
             {
-                __instance.m_ContainerSearchSeconds = 0f;
+                return;
+            }
+
+            Container container = __instance.m_Container;
+            bool isInspected = container.IsInspected();
+            bool isEmpty = container.IsEmpty();
+
+            float multiplier;
+
+            if (!isInspected && isEmpty && FasterSearchingSettings.Instance.instantlySearchEmpty)
+            {
+                multiplier = 0f;
             }
             else if (isInspected)
             {
-                __instance.m_ContainerSearchSeconds = baseSearchTime * FasterSearchingSettings.options.searchedContainerSpeedMultiplier;
+                multiplier = FasterSearchingSettings.Instance.openTimeMultiplier;
             }
             else
             {
-                __instance.m_ContainerSearchSeconds = baseSearchTime * FasterSearchingSettings.options.searchSpeedMultiplier;
+                multiplier = FasterSearchingSettings.Instance.searchTimeMultiplier;
+            }
+
+            // Игра внутри PerformHold() уже записала актуальное базовое время в HoldTime
+            float targetTime = __instance.HoldTime * multiplier;
+
+            if (targetTime <= 0.01f)
+            {
+                // Ставим минимальный порог > 0, чтобы избежать деления на 0 в NormalizedProgress,
+                // и сразу доводим таймер до конца — контейнер откроется мгновенно на следующем кадре
+                __instance.HoldTime = 0.01f;
+                __instance.m_Timer = 0.01f;
+            }
+            else
+            {
+                __instance.HoldTime = targetTime;
             }
         }
     }
