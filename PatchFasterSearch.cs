@@ -1,23 +1,43 @@
-﻿using HarmonyLib;
+﻿using System.Collections.Generic;
+using HarmonyLib;
 using Il2Cpp;
 
-namespace FasterSearching {
+namespace FasterSearching
+{
+    [HarmonyPatch(typeof(Container), nameof(Container.BeginContainerOpen))]
+    internal static class PatchFasterSearch
+    {
+        // Запоминаем оригинальное время обыска для каждого контейнера по его InstanceID,
+        // чтобы при повторном открытии множитель не применялся несколько раз подряд
+        private static readonly Dictionary<int, float> OriginalSearchTimes = new Dictionary<int, float>();
 
-	[HarmonyPatch(typeof(Container), "BeginContainerOpen")]
-	internal static class PatchFasterSearchUpdated {
-		static void Prefix(Container __instance) {
-			ContainerInteraction interaction = __instance.GetComponent<ContainerInteraction>();
-			if (interaction == null) return;
+        private static void Prefix(Container __instance)
+        {
+            if (__instance == null) return;
 
-			if (__instance.IsInspected()) {
-				interaction.HoldTime *= FasterSearchingSettings.Instance.openTimeMultiplier;
-			} else {
-				if (__instance.m_GearToInstantiate.Count == 0 && FasterSearchingSettings.Instance.instantlySearchEmpty) {
-					interaction.HoldTime = 0;
-				} else {
-					interaction.HoldTime *= FasterSearchingSettings.Instance.searchTimeMultiplier;
-				}
-			}
-		}
-	}
+            int instanceId = __instance.GetInstanceID();
+
+            if (!OriginalSearchTimes.TryGetValue(instanceId, out float baseSearchTime))
+            {
+                baseSearchTime = __instance.m_ContainerSearchSeconds;
+                OriginalSearchTimes[instanceId] = baseSearchTime;
+            }
+
+            bool isEmpty = __instance.IsEmpty();
+            bool isInspected = __instance.IsInspected();
+
+            if (isEmpty && FasterSearchingSettings.options.instantEmptyContainers)
+            {
+                __instance.m_ContainerSearchSeconds = 0f;
+            }
+            else if (isInspected)
+            {
+                __instance.m_ContainerSearchSeconds = baseSearchTime * FasterSearchingSettings.options.searchedContainerSpeedMultiplier;
+            }
+            else
+            {
+                __instance.m_ContainerSearchSeconds = baseSearchTime * FasterSearchingSettings.options.searchSpeedMultiplier;
+            }
+        }
+    }
 }
